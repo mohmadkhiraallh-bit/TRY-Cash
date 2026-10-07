@@ -11,6 +11,7 @@ import os
 import secrets
 import string
 import logging
+import uvicorn
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
 
@@ -329,8 +330,6 @@ async def admin_fp_verify(body: dict):
     user = await db.users.find_one({"email": email})
     if not user or not user.get("isAdmin"):
         raise HTTPException(status_code=404, detail="not_found")
-    # We trust the client here since WebAuthn assertion validation would need public key + signature verification on server.
-    # For MVP, we just verify a credential exists (means enrolled previously).
     if not user.get("webauthnCredentialId"):
         raise HTTPException(status_code=400, detail="not_enrolled")
     token = create_token(email, is_admin=True)
@@ -358,7 +357,6 @@ async def user_by_address(address: str):
 async def update_me(body: PersonalInfoIn, user=Depends(get_current_user)):
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     if updates:
-        # Recompute fullName if name parts changed
         if any(k in updates for k in ("firstName", "fatherName", "surname")):
             full_user = await db.users.find_one({"email": user["email"]})
             merged = {**full_user, **updates}
@@ -493,7 +491,6 @@ async def admin_reset(body: ResetIn, admin=Depends(require_admin)):
     await db.transactions.delete_many({})
     await db.exchange_log.delete_many({})
     await db.notifications.delete_many({})
-    # Reset admin wallets
     await db.users.update_one({"email": ADMIN_EMAIL}, {"$set": {"wallets": {"SYP": 0, "USD": 0, "TRY": 0}, "webauthnCredentialId": None}})
     return {"ok": True}
 
@@ -545,7 +542,6 @@ async def send_money(body: SendIn, user=Depends(get_current_user)):
     if receiver["email"] == sender["email"]:
         raise HTTPException(status_code=400, detail="cannot_send_to_self")
 
-    # Atomic updates
     await db.users.update_one({"email": sender["email"]}, {"$inc": {f"wallets.{body.currency}": -amt}})
     await db.users.update_one({"email": receiver["email"]}, {"$inc": {f"wallets.{body.currency}": amt}})
 
@@ -658,7 +654,7 @@ async def mark_notifications_read(user=Depends(get_current_user)):
 
 
 # ═══════════════════════════════════════════════════════════════
-# Mount router + CORS
+# Mount router + CORS & Execution
 # ═══════════════════════════════════════════════════════════════
 app.include_router(api)
 
@@ -677,3 +673,8 @@ logger = logging.getLogger("trycash")
 @api.get("/")
 async def root():
     return {"ok": True, "service": "TRY Cash API"}
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("server:app", host="0.0.0.0", port=port)
