@@ -1,0 +1,87 @@
+{
+  "summary": "Frontend-only e2e testing of TRY Cash luxury wallet app. Executed full login flow (admin fingerprint modal → security-question fallback) and verified every requirement in the review request: home header (username on RIGHT + bell/theme on LEFT in RTL), 3-currency mini-cards grid with gold-active state, active-balance detail card with Exchange pill + Receive/Send buttons, Recent Transactions empty state + see-all link, bottom nav (RTL order with home rightmost, 3 dividers via ::after pseudo-element, scanner FAB restricted to /app/home only), classic white QR with black print + gold TC logo overlay, Scanner page shows only Enable-Camera (upload button removed), notification bell with persistent 'verify account' notif for unverified users. 33 of 34 assertions passed (~97%). One HIGH-priority routing bug found: btn-exchange → /app/exchange has no matching Route (blank page).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "AppHome → Exchange",
+        "issue": "Clicking [data-testid=btn-exchange] navigates to /app/exchange, but this Route is NOT registered in /app/frontend/src/App.js. React Router logs 'No routes matched location \"/app/exchange\"' and the user sees a blank page (only the AppLayout shell + 'Made with Emergent' badge render). All other buttons (btn-receive → /app/receive, btn-send → /app/send) resolve correctly.",
+        "affected_selectors": ["[data-testid=btn-exchange]"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_1.json"
+  ],
+  "action_items": [
+    "Register an /app/exchange route in /app/frontend/src/App.js (add a new AppExchange page component or point btn-exchange to an existing route). Currently the Exchange pill on the home hero card is a dead link."
+  ],
+  "critical_code_review_comments": [
+    "AppHome.jsx line 30: `useState('SYP')` — initial selected currency is hardcoded to SYP. Consider deriving from user's preference or highest-balance wallet.",
+    "AppHome.jsx line 35: `WALLETS.find(...)` assumes the key always matches; if `selected` ever becomes stale (e.g., user removes a wallet in future), `activeWallet` could be undefined and crash at line 114 (`wname(activeWallet)`) and 119 (`activeWallet.symbol`). Add a fallback.",
+    "AppLayout.jsx line 26: `[...baseTabs].reverse()` mutates a shallow copy which is fine, but note that the `dir=\"ltr\"` on the nav element (line 56) combined with the manual reverse is confusing. A single approach (either CSS-based flex-direction:row-reverse for Arabic OR array reverse) would be cleaner and eliminate the mixed directional logic.",
+    "AppReceive.jsx line 23: External QR service (api.qrserver.com) is a third-party dependency; if it goes down, the QR won't render. Consider using a local QR-code library (e.g., qrcode.react) for offline resilience.",
+    "NotificationBell.jsx line 23-24: `useMemo` depends on `[current, open]` — recomputes on every open toggle. Fine for now, but `getNotifs` reads localStorage each time; consider a context or subscription pattern when notifications scale.",
+    "notifications.js line 20: `list.unshift(...)` mutates the array returned by `read()` — safe because read() returns a fresh parse, but flag for future refactoring if caching is added.",
+    "Missing /app/exchange route (already listed above under action_items — considered CRITICAL because the button is clearly labeled 'صرف العملات' but does nothing)."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "n/a (backend not in scope)",
+    "frontend": "97%"
+  },
+  "test_credentials": "Admin: trycashsupport@gmail.com / asd.fhd.nemr — security answer: فاطمة بطيخ (read from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Used existing pre-seeded admin. For persistent-verify-notif test, temporarily flipped `isVerified` to false in localStorage keys `trycash_current_user` and `trycash_users['trycashsupport@gmail.com']`, then restored to true.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "localStorage keys are `trycash_current_user` (object) and `trycash_users` (object keyed by email, NOT an array). Do NOT use Array.isArray or findIndex on `trycash_users`. Admin is pre-verified so persistent-verify notif requires flipping isVerified=false in BOTH keys and reload. Nav dividers are implemented via `.trycash-nav-divider::after` pseudo-element (1px gold gradient) — checking `borderRightStyle` will falsely fail; use getComputedStyle(el, '::after'). The /app/exchange route is missing — verify main agent adds it before retest.",
+  "detailed_test_evidence": {
+    "passed_assertions": [
+      "Login page loads with brand & form",
+      "Fingerprint modal appears after login submit",
+      "Security-question fallback accepts 'فاطمة بطيخ'",
+      "Landed on /app/home",
+      "home-username, verified-badge, home-theme-toggle, notif-bell-btn all present",
+      "RTL layout: username.x=237 > bell.x=20 (username on right)",
+      "wallet-SYP, wallet-USD, wallet-TRY all present in grid-cols-3 container",
+      "SYP starts active with class trycash-wallet-mini-active",
+      "Clicking wallet-USD updates active class + balance label to 'الدولار الأمريكي'",
+      "Clicking wallet-TRY updates active class",
+      "btn-receive → /app/receive OK",
+      "btn-send → /app/send OK",
+      "QR src contains color=000000 & bgcolor=FFFFFF (classic B/W)",
+      "qr-logo overlay renders text 'TC' centered on QR",
+      "recent-tx-section + tx-empty rendered (admin has 0 txns)",
+      "tx-see-all → /app/transactions OK",
+      "bottom-nav has 4 tabs; tab-home is rightmost in Arabic RTL",
+      "3 dividers rendered via ::after pseudo (linear-gradient 1px gold)",
+      "scanner-fab visible on /app/home",
+      "scanner-fab hidden on /app/profile",
+      "scanner-fab reappears on /app/home",
+      "profile-support → /app/support OK",
+      "home-support-btn does not exist on AppHome (confirmed removed)",
+      "enable-camera-btn present on Scanner",
+      "scan-upload-alt DOES NOT exist (confirmed removed)",
+      "Notification menu opens on bell click",
+      "Persistent verify notif appears for unverified user with class trycash-notif-persistent",
+      "Unread count badge shows '1' for unverified user",
+      "Verified badge hidden for unverified user",
+      "Clicking verify notif → navigates to /app/verify-id",
+      "For verified admin, notif menu shows no system-verify item"
+    ],
+    "failed_assertions": [
+      "btn-exchange navigation: URL becomes /app/exchange but no Route matches → blank page"
+    ]
+  },
+  "rca_of_the_issue": {
+    "bug": "/app/exchange route missing",
+    "reproduction": "1) Login as admin. 2) Navigate to /app/home. 3) Click the Exchange pill (data-testid=btn-exchange) on the balance hero card. 4) Observe blank content area with only the layout shell + bottom nav visible.",
+    "root_cause": "In /app/frontend/src/App.js the <Route path=\"exchange\" ...> is not registered under the /app parent route. The buttonhandler navigate('/app/exchange') in AppHome.jsx works, but React Router falls through with 'No routes matched location'.",
+    "mitigation": "Create /app/frontend/src/pages/app/AppExchange.jsx and add `<Route path=\"exchange\" element={<AppExchange />} />` inside the /app parent route block in App.js. Alternatively, temporarily point btn-exchange to /app/services or wrap it in a coming-soon toast."
+  }
+}

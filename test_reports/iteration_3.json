@@ -1,0 +1,82 @@
+{
+  "summary": "End-to-end frontend test of Admin Panel Section 1 (Currencies & Exchange) + full Exchange feature. Ran 43 assertions across admin panel tiles, wallets modal, USD/TRY rate modals, exchange flow, transactions filters, and admin exchange-log. 36/43 passed. Data persistence in localStorage is 100% correct (verified via readback and post-relogin admin view). However TWO React state-refresh bugs are blocking the user-facing UX: (1) After clicking Save in the admin Wallets modal the amount display keeps showing the OLD value (0) until the modal is closed & reopened; (2) After a successful exchange the user is redirected to /app/home but the wallet cards still show STALE balances (pre-exchange) until a manual reload — because executeExchange writes localStorage but never calls setCurrent on the auth context. Everything else (rates modals, defaults, quote calc, confirmation, atomic swap, no-counterparty rule, 4-tab filter, admin log entry with user name + amounts, admin wallet delta) works correctly.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "AdminPanel > WalletsModal (admin-wallets-modal)",
+        "issue": "After clicking [data-testid=admin-wallet-save-<CUR>], the displayed [data-testid=admin-wallet-amt-<CUR>] does NOT update to the newly saved value — it continues to render the pre-edit value (0 for a fresh admin). Data IS persisted (visible on /app/home wallet-SYP=1,000,000 and after reopening the modal admin-wallet-amt-USD=5,050 later). Root cause: setAdminWallet() in AuthContext writes localStorage but never calls setCurrent(), and the modal reads current.wallets[cur] from the useAuth() state. Only the onClose handler calls updateUser({}) which finally refreshes the auth state.",
+        "selector": "[data-testid=admin-wallet-amt-<CUR>]",
+        "priority": "HIGH"
+      },
+      {
+        "component": "AppHome after exchange redirect",
+        "issue": "After exchange-confirm-ok fires and navigate('/app/home') runs, wallet cards ([data-testid=wallet-USD], [data-testid=wallet-SYP]) render STALE balances (USD=100, SYP=0) even though localStorage.trycash_current_user is correctly updated to {USD:50, SYP:650000}. Reproduces every time. A manual page reload fixes the display. Root cause: executeExchange in AuthContext writes to localStorage AND to trycash_current_user but the React AuthProvider's `current` state (useState) is never re-read from localStorage. Nothing calls setCurrent(updatedUser).",
+        "selector": "[data-testid=wallet-USD] , [data-testid=wallet-SYP]",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Exchange execution",
+        "issue": "State-only UI refresh missing. Persistence, atomic wallet math (user -50 USD, +650,000 SYP; admin +50 USD, -650,000 SYP), transaction records, admin log entry, and privacy rule (no counterparty on user side) all work correctly — verified via localStorage readback and admin re-open. The gap is purely in-React state hydration.",
+        "affected_selectors": ["[data-testid=wallet-USD]", "[data-testid=wallet-SYP]", "[data-testid=admin-wallet-amt-SYP]", "[data-testid=admin-wallet-amt-USD]", "[data-testid=admin-wallet-amt-TRY]"]
+      }
+    ],
+    "design_issues": []
+  },
+  "passed_assertions_highlights": [
+    "Admin login (email/password + fingerprint-fallback security answer) → /app/home",
+    "/app/admin renders admin-title, section-currencies-exchange, btn-manage-wallets, btn-rates-USD, btn-rates-TRY, admin-exchange-log, exchange-log-empty",
+    "Wallets modal opens, inputs accept numeric input, save-icon click writes to localStorage (verified via readback)",
+    "Home wallet-SYP correctly reflects 1,000,000 after admin adjustment (persistence proven)",
+    "USD default sell=13,000, buy=13,500; TRY default sell=300, buy=320",
+    "Rate edit → save flow works with toast (Saved) and updates rate value",
+    "/app/exchange loads with title, from/to cards, pickers, amount input (default USD→SYP)",
+    "Typing 50 USD auto-computes 650,000 in exchange-received-display (sell-rate math ✓)",
+    "exchange-confirm-modal shows 'تدفع 50 USD' and 'تستلم 650,000 SYP'",
+    "Exchange executes atomically: user localStorage wallets={USD:50, SYP:650000}, admin wallets={USD:5050, SYP:350000, TRY:20000}",
+    "Home + Transactions render exchange tx with label 'عملية صرف', NO admin/counterparty name leaked",
+    "tx-filters has 4 tabs; filter-exchange shows the exchange row; filter-sent hides it (tx-empty visible); filter-received hides it (tx-empty visible)",
+    "Admin exchange log contains user's full name 'Test X User', paid 50 USD, received 650,000 SYP — verified in screenshot"
+  ],
+  "test_report_links": ["/app/test_reports/iteration_1.json", "/app/test_reports/iteration_2.json", "/app/test_reports/iteration_3.json"],
+  "action_items": [
+    "FIX HIGH — setAdminWallet() in /app/frontend/src/contexts/AuthContext.jsx must also refresh the React state when the acting session is the admin. Simplest patch: after writing to localStorage, if cur.email === ADMIN_EMAIL, call an exposed setter or expose a refreshCurrent() helper from AuthProvider that re-reads AUTH_KEY into `current`. Currently only the onClose handler triggers updateUser({}) which masks the bug on modal close but not while the modal is still open.",
+    "FIX HIGH — executeExchange() in /app/frontend/src/contexts/AuthContext.jsx must update the React `current` state of the acting user. Options: (a) return the fresh user object and have AppExchange call updateUser(res.updatedUser) before navigate, or (b) expose a refreshCurrent() from the context and call it inside executeExchange, or (c) convert executeExchange to a method on AuthProvider that calls setCurrent(u). Right now the redirect to /app/home shows stale wallet numbers until a full page reload.",
+    "OPTIONAL — Consider a single centralized 'refreshCurrentUserFromStorage()' hook exported from AuthContext to cover any future direct-localStorage mutation (setAdminWallet, executeExchange, etc.).",
+    "OPTIONAL — updateUser({}) trick used at modal-close is a code smell; replace with an explicit refreshCurrent()."
+  ],
+  "critical_code_review_comments": [
+    "AuthContext.jsx mixes React state (useState `current`) with direct localStorage mutators (setAdminWallet, executeExchange, addTx). Any mutator that touches the ACTING user MUST also update `current` via setCurrent — otherwise UI is silently stale. Right now only login/register/updateUser do that.",
+    "executeExchange returns { ok, updatedUser } but no caller uses updatedUser. Consumers should either receive it in the return or the context must own the state update.",
+    "AdminPanel.jsx line 204: onClose={() => { setModal(null); refresh(); updateUser({}); }} — calling updateUser with empty patch to force a re-hydrate is a code smell; expose a proper refresh helper.",
+    "AppExchange.jsx line 135 uses useMemo(() => getRates(), []) — rates array will not react to admin editing rates while the exchange screen is open. Acceptable but worth noting.",
+    "AdminPanel L10-75: three near-duplicate localization dictionaries in the same file; hoist to i18n resources (already flagged in iteration 2)."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "n/a (frontend only)", "frontend": "84% (36/43 assertions). All 7 failures trace to just 2 root causes — both React state-refresh bugs. Underlying data persistence is 100% correct." },
+  "test_credentials": "Admin: trycashsupport@gmail.com / asd.fhd.nemr — security answer 'فاطمة بطيخ'. Seeded test user via localStorage: testuser@example.com / test1234 with wallets={USD:100}.",
+  "seed_data_creation": "Injected test user 'testuser@example.com' (fullName 'Test X User') directly into trycash_users localStorage with USD=100 balance for the exchange flow. Also set trycash_current_user to that user to bypass admin fingerprint modal for the exchange test leg.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Selectors + happy path all correct. When retesting after fix, focus on: (1) admin-wallet-amt-<CUR> should IMMEDIATELY reflect saved value while modal is still open, (2) after exchange-confirm-ok + navigate('/app/home') the wallet-USD and wallet-SYP tiles should show the new values WITHOUT a manual reload. To reproduce fast: localStorage.clear(); admin login; open Wallets modal; edit SYP to 500000; click save — value should show 500,000 not 0. For exchange leg, seed a user then click btn-exchange → fill 50 → submit → confirm and immediately read wallet-USD without reload.",
+  "rca_of_the_issue": {
+    "bug_1": {
+      "title": "Admin wallet save shows stale amount in modal",
+      "reproduction": "Fresh admin login → /app/admin → click btn-manage-wallets → click admin-wallet-edit-SYP → type 1000000 → click admin-wallet-save-SYP",
+      "expected": "admin-wallet-amt-SYP renders '1,000,000'",
+      "actual": "admin-wallet-amt-SYP still renders '0'; only after closing and reopening the modal does it show '1,000,000'",
+      "root_cause": "AuthContext.setAdminWallet() writes localStorage but does not call setCurrent(). WalletsModal reads current.wallets[cur] from stale React state.",
+      "fix_hint": "In setAdminWallet, if the current session user is admin, also update AuthProvider state. Cleanest: expose a `refreshCurrent()` from useAuth and call it from AdminPanel's save handler."
+    },
+    "bug_2": {
+      "title": "User wallet stale after exchange redirect",
+      "reproduction": "As non-admin user with USD=100 → /app/exchange → type 50 → submit → confirm → auto-redirect to /app/home",
+      "expected": "wallet-USD = 50, wallet-SYP = 650,000",
+      "actual": "wallet-USD = 100, wallet-SYP = 0 (until manual page reload); localStorage.trycash_current_user IS correct.",
+      "root_cause": "AuthContext.executeExchange() writes localStorage AUTH_KEY but never triggers setCurrent on AuthProvider; consumers don't consume `updatedUser` returned.",
+      "fix_hint": "Return updatedUser and have AppExchange call updateUser(updatedUser) before navigate, OR make executeExchange a method inside AuthProvider that owns setCurrent."
+    }
+  }
+}

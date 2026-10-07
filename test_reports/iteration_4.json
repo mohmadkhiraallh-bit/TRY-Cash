@@ -1,0 +1,49 @@
+{
+  "summary": "REGRESSION RETEST of the two HIGH-priority React state-refresh bugs from iteration 3. BOTH BUGS ARE FIXED. (1) Admin Wallets Modal: editing SYP→500000 / USD→5000 / TRY→20000 now displays '500,000' / '5,000' / '20,000' immediately in [data-testid=admin-wallet-amt-<CUR>] while the modal is still open. (2) Post-exchange redirect: after typing 50 in exchange (USD→SYP) → confirm-ok → auto-redirect to /app/home, wallet-USD renders '50$' and wallet-SYP renders '650,000ل.س' without any manual reload. All previously-passing behaviors still work: admin exchange log shows 'Exchange Test User' with -50 USD / +650,000 SYP, admin's own wallets updated correctly (USD 5,050 / SYP 9,350,000 / TRY 20,000), user's transactions list shows the exchange row with label 'عملية صرف' and no admin counterparty name leaked. 100% of the 2 blocking bugs + 4 regression assertions now pass.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "passed_assertions": [
+    "BUG1-SYP: admin-wallet-amt-SYP='500,000' immediately after save, modal still open ✓",
+    "BUG1-USD: admin-wallet-amt-USD='5,000' immediately after save, modal still open ✓",
+    "BUG1-TRY: admin-wallet-amt-TRY='20,000' immediately after save, modal still open ✓",
+    "BUG1 persistence: localStorage trycash_users admin.wallets = {SYP:500000, USD:5000, TRY:20000} ✓",
+    "BUG2: post-exchange redirect URL reached '/app/home' within 200ms ✓",
+    "BUG2: [data-testid=wallet-USD]='50$' (was '100$' pre-exchange) without reload ✓",
+    "BUG2: [data-testid=wallet-SYP]='650,000ل.س' (was '0ل.س' pre-exchange) without reload ✓",
+    "BUG2 persistence: localStorage trycash_current_user.wallets = {SYP:650000, USD:50, TRY:0} ✓",
+    "Regression: admin exchange log contains 'Exchange Test User' + '50' + '650,000' ✓",
+    "Regression: admin wallets modal shows USD=5,050 / SYP=9,350,000 / TRY=20,000 (correct deltas) ✓",
+    "Regression: user transactions page shows exchange row (عملية صرف) ✓",
+    "Regression: no admin counterparty leaked ('TRY Cash Support' / 'trycashsupport' NOT present on user side) ✓"
+  ],
+  "fix_verification": {
+    "AuthContext.jsx refreshCurrent()": "Confirmed exposed via useAuth() and correctly re-hydrates `current` from AUTH_KEY.",
+    "AdminPanel.jsx refresh()": "Confirmed calls refreshCurrent() + tick++; wallet amt updates immediately while modal open.",
+    "AppExchange.jsx doExchange()": "Confirmed calls refreshCurrent() before the 200ms setTimeout → navigate('/app/home'); home wallet cards render fresh values."
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_1.json",
+    "/app/test_reports/iteration_2.json",
+    "/app/test_reports/iteration_3.json",
+    "/app/test_reports/iteration_4.json"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Fix is minimal and correct. `refreshCurrent()` cleanly re-reads AUTH_KEY into React state — better than the previous `updateUser({})` empty-patch code smell.",
+    "Note: setAdminWallet() and executeExchange() still directly mutate localStorage from outside the React component tree — they rely on callers to invoke refreshCurrent() afterward. This is acceptable for the mock-backend era but should be migrated to context methods (or a real backend) so state consistency isn't caller-dependent. Not blocking.",
+    "AppExchange.jsx L135 still uses useMemo(() => getRates(), []) — rates don't react to admin editing while the exchange screen is open. Same note as iteration 3; not caused by this fix.",
+    "In an over-liquid scenario the admin SYP wallet CAN go negative when a user sells foreign currency (verified: after seeding SYP=500K in iteration 3 test, the exchange failed via insufficient_admin_liquidity — the guard works). Considered semantically fine for mock. No fix needed."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "n/a (frontend only)", "frontend": "100% (12/12 regression assertions passing — both root-cause bugs fixed)" },
+  "test_credentials": "Admin: trycashsupport@gmail.com / asd.fhd.nemr — security answer 'فاطمة بطيخ'. Test approach bypassed the fingerprint modal by seeding trycash_current_user directly (documented in iteration 3).",
+  "seed_data_creation": "Seeded 'exchangetest@example.com' (Exchange Test User) with wallets={USD:100,SYP:0,TRY:0} and boosted admin liquidity to {SYP:10M, USD:5000, TRY:20000} in localStorage before the exchange leg. Rationale: iteration 3 seeded only ~500K SYP which triggered the insufficient_admin_liquidity guard and prevented the exchange from completing; the retest needs a completed exchange to observe the post-redirect state.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Both HIGH-priority React state-refresh bugs from iteration 3 are FIXED and stayed fixed across full end-to-end retest. Fix approach: AuthProvider exposes refreshCurrent() → AdminPanel.refresh() calls it after each save → AppExchange.doExchange() calls it before navigating back. No new regressions. If future changes touch AuthContext direct-localStorage mutators (setAdminWallet, executeExchange), the same refreshCurrent() pattern must be applied by callers or the mutators should be moved inside the provider. Consider a lint/test to enforce.",
+  "rca_of_the_issue": "Both bugs were caused by direct-localStorage mutators (setAdminWallet, executeExchange) writing AUTH_KEY without notifying the React AuthProvider's `current` useState. Fix — exposing refreshCurrent() from AuthProvider and calling it from AdminPanel (post-save) and AppExchange (pre-navigate) — cleanly re-hydrates state. Verified via full flow: pre-state → mutation → immediate readback of data-testid values matches expected + localStorage."
+}

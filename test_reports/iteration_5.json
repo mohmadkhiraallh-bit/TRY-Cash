@@ -1,0 +1,76 @@
+{
+  "summary": "Frontend-only test of new massive feature set (admin fingerprint enroll card, 3-tab AdminPanel with Users + Verification, ban/unban with reason toast on login, verify approve/reject with notifications, guardian-verified badge, and Cormorant-font cleanup on numeric displays). 31 assertions PASS, 2 FAIL. All new admin flows work end-to-end (seed user → wallet edit shows 250 immediately, ban writes 'محظور' tag, banned login toast shows 'نشاط مشبوه' & rejects login, verify approve flips isVerified=true and removes from pending list, guardian reject stores reason and pushes guardian_rejected notification, notification bell renders verify_approved + guardian_rejected reason for the tester, guardian-verified-badge renders ONLY when guardianVerified=true, admin-fp-card visible for admin & hidden for non-admin, admin-fp-enroll button present when not enrolled). 2 real bugs found: (a) UNBAN does not refresh UI — the 'محظور' tag remains visible after clicking user-ban-* on an already-banned user (works in localStorage but stale UI); (b) exchange-received-display still uses fontFamily 'Cormorant Garamond' — not cleaned up in AppExchange.jsx L253.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "AdminPanel > UsersSection",
+        "issue": "Clicking user-ban-* on an already-banned user calls unbanUser() correctly (localStorage.trycash_users.<email>.banned becomes false) BUT the row keeps rendering the 'محظور' tag [data-testid=user-banned-<email>]. Root cause: `const users = useMemo(() => getAllUsers(), [modal])` depends ONLY on `modal` state; unban path doesn't open a modal, so the memoized users list stays stale even after parent tick+refreshCurrent. The BAN path works because opening the ban-modal changes `modal` and forces the memo to recompute after close.",
+        "selector": "[data-testid=user-banned-tester@example.com]",
+        "priority": "HIGH"
+      },
+      {
+        "component": "AppExchange",
+        "issue": "exchange-received-display still has inline style fontFamily: \"'Cormorant Garamond', serif\" — violates the numeric-cleanup requirement. Fix: remove the fontFamily entry from the style prop on the <div data-testid=\"exchange-received-display\"> at AppExchange.jsx L251-256.",
+        "selector": "[data-testid=exchange-received-display]",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "passed_assertions": [
+    "Admin login via fingerprint modal → auto-question mode → answer 'فاطمة بطيخ' → home reached",
+    "/app/password-security shows [data-testid=admin-fp-card] with [data-testid=admin-fp-enroll] button for admin (not enrolled)",
+    "admin-fp-card is HIDDEN for non-admin regular user",
+    "/app/admin renders [data-testid=admin-tabs] with all 3 tabs: tab-admin-exchange (default), tab-admin-users, tab-admin-verify",
+    "Users tab → [data-testid=section-users] visible, seeded [data-testid=user-row-tester@example.com] with all 3 action buttons",
+    "user-wallets modal opens, u-wallet-edit-USD → input 250 → u-wallet-save-USD → u-wallet-amt-USD shows '250' immediately (no reload)",
+    "user-info-modal opens showing seeded user data ('محمد', email, etc)",
+    "ban-modal opens, ban-reason-input accepts 'نشاط مشبوه', ban-confirm closes modal, user-banned tag appears",
+    "Banned user login attempt → toast 'تم حظر حسابك: نشاط مشبوه' shown, login rejected (stays on /)",
+    "Verify tab → section-verify with both subsections (verify-pending-id, verify-pending-guardian) each containing tester rows",
+    "view-id-tester → view-photos-modal opens (with icon placeholders)",
+    "approve-id → approve-modal-id-tester opens → approve-confirm → users.isVerified=true persisted → id-row removed",
+    "reject-g → reject-modal-guardian-tester opens → reason 'الصورة غير واضحة' → reject-confirm → guardian-row removed",
+    "localStorage.trycash_notifs_tester@example.com contains verify_approved + guardian_rejected with reason preserved",
+    "Notification bell for tester renders both notifications with reason text 'الصورة غير واضحة'",
+    "guardian-verified-badge renders when user.guardianVerified === true (verifiedguardian@example.com)",
+    "guardian-verified-badge NOT rendered when guardianVerified === false (tester@example.com)",
+    "Cormorant absent from: [data-testid=wallet-SYP] number, [data-testid=active-balance-amount], [data-testid=admin-wallet-amt-USD], [data-testid=rate-val-USD-sell], [data-testid=exchange-amount-input] — all render 'Tajawal, Amiri, sans-serif'"
+  ],
+  "failed_assertions": [
+    "UNBAN does not refresh UI: 'محظور' tag persists after clicking user-ban-* on banned user (UI stale — see RCA)",
+    "exchange-received-display still uses Cormorant Garamond (computed fontFamily: '\"Cormorant Garamond\", serif')"
+  ],
+  "test_report_links": [
+    "/app/test_reports/iteration_1.json",
+    "/app/test_reports/iteration_2.json",
+    "/app/test_reports/iteration_3.json",
+    "/app/test_reports/iteration_4.json",
+    "/app/test_reports/iteration_5.json"
+  ],
+  "action_items": [
+    "Fix UNBAN stale UI in AdminPanel.jsx > UsersSection: change `useMemo(() => getAllUsers(), [modal])` to depend on a bump counter (e.g. add `const [bump, setBump] = useState(0)` and include `bump` in deps; increment bump inside the unban onClick after unbanUser()). Or simpler: replace useMemo with a state that is re-set in a small effect keyed by [modal, tick] and pass `tick` prop into UsersSection.",
+    "Remove `fontFamily: \"'Cormorant Garamond', serif\"` from the style prop on [data-testid=exchange-received-display] (AppExchange.jsx L253) to comply with the numeric de-decoration requirement."
+  ],
+  "critical_code_review_comments": [
+    "AdminPanel.jsx: `refresh()` in parent bumps tick but child UsersSection/VerifySection each use `useMemo(..., [modal])` internally — unrelated to parent tick. Any refresh-triggered admin state that doesn't open a modal (unban, or verify actions that call setModal(null) but might be racy) risks stale views. Recommend hoisting `tick` (or a `bump`) down as a prop and including it in the useMemo dep array — this is exactly the same class of bug fixed in iterations 3–4 for wallets modal but on a different code path.",
+    "AdminFingerprintModal auto-switches to question mode when no credential — verified working, but there is no [data-testid=fp-modal] `mode` label; tests still had to try fp-answer first, then fallback to fp-cant. Minor: consider a testid like `fp-mode=question` for clarity.",
+    "webauthn.js correctly stores base64url credential id in `trycash_admin_webauthn`; enroll/verify code is well-structured; note that this is inherently untestable in headless Chrome without a virtual authenticator (documented in problem statement).",
+    "NotificationBell.jsx: renders verify_approved / verify_rejected / guardian_approved / guardian_rejected correctly, including the admin's reason text; icon color-coding is appropriate (emerald for approved, rose for rejected). No bug.",
+    "AuthContext.jsx: banUser/unbanUser/approveUserId/rejectUserId/approveGuardian/rejectGuardian all correctly write to USERS_KEY and refresh AUTH_KEY when target is current session user. login() returns {error:'banned', banReason} — verified working via toast in Login.jsx.",
+    "AppPersonalInfo.jsx guardian-verified-badge correctly gated by `current.guardianVerified` — verified in both truthy and falsy branches."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "n/a (frontend only)",
+    "frontend": "94% (31/33 assertions pass) — 2 real bugs to fix"
+  },
+  "test_credentials": "Admin: trycashsupport@gmail.com / asd.fhd.nemr — security answer 'فاطمة بطيخ'. Tester (seeded): tester@example.com / Testpass1!. Guardian-verified seed: verifiedguardian@example.com / Testpass1!.",
+  "seed_data_creation": "Seeded 2 users directly via localStorage.trycash_users: (1) tester@example.com — non-admin, idFrontUploaded+selfieUploaded+verificationPending+guardianIdUploaded true, isVerified+guardianVerified false, wallets={SYP:0,USD:100,TRY:0}, full personal-info fields incl. Arabic name 'محمد خير الله' + guardian block. (2) verifiedguardian@example.com — non-admin, guardianVerified=true (for badge test).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Two fixes required: (1) UsersSection unban UI staleness — parent tick doesn't reach child useMemo; recommend adding a bump/tick prop into child. (2) exchange-received-display Cormorant Garamond inline fontFamily. Everything else in the massive feature set works — including WebAuthn hookup (button visibility only), 3 tabs, all CRUD user actions, verification approve/reject with notifications, ban/unban with reason toast on login, guardian-verified badge, and Cormorant cleanup on ALL other numeric surfaces (wallet-mini, active-balance-amount, admin-wallet-amt-*, rate-val-*, exchange-amount-input). Session-persistence hack for tests: after admin login via UI, subsequent navigations preserved 'trycash_current_user' in localStorage; when needed to switch to tester, we overwrite trycash_current_user directly and reload — this bypass proved reliable. Guardian test IDs use short suffix: view-g-<email>, approve-g-<email>, reject-g-<email> (NOT view-guardian-...); the modal/reason inputs use the FULL form: [data-testid=reject-modal-guardian-<email>] / [data-testid=reject-reason-guardian-<email>] / [data-testid=reject-confirm-guardian-<email>]. Reject-id path uses kind='id' consistently.",
+  "rca_of_the_issue": "BUG-UNBAN-STALE-UI: In AdminPanel.jsx > UsersSection, the users list is memoized as `useMemo(() => getAllUsers(), [modal])`. The BAN path works because clicking ban opens a modal (modal state changes twice: null→ban→null); each transition invalidates the memo. The UNBAN path calls `unbanUser(u.email)` synchronously inline WITHOUT changing `modal`, so the memo re-uses the previously-computed users array containing `banned:true`. Fix: add a bump/tick prop from parent (already exposed via `refresh()`) into UsersSection and include it in the useMemo deps, OR replace useMemo with a useEffect+useState pair keyed on that same tick. BUG-EXCHANGE-CORMORANT: The div at AppExchange.jsx L251-256 (data-testid=exchange-received-display) still has `fontFamily: \"'Cormorant Garamond', serif\"` in its inline style — cleanup pass missed this element. Fix is a one-line style removal."
+}
